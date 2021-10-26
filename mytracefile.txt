@@ -1,0 +1,15 @@
+capturing trace... done
+TRACE:
+# tracer: nop
+#
+# entries-in-buffer/entries-written: 2/2   #P:8
+#
+#                                      _-----=> irqs-off
+#                                     / _----=> need-resched
+#                                    | / _---=> hardirq/softirq
+#                                    || / _--=> preempt-depth
+#                                    ||| /     delay
+#           TASK-PID    TGID   CPU#  ||||    TIMESTAMP  FUNCTION
+#              | |        |      |   ||||       |         |
+          atrace-14501 (14501) [005] .... 869895.085603: tracing_mark_write: trace_event_clock_sync: parent_ts=821949.375000
+          atrace-14501 (14501) [005] .... 869895.085606: tracing_mark_write: trace_event_clock_sync: realtime_ts=1635237985025

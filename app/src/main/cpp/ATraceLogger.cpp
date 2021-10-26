@@ -6,10 +6,15 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sstream>
+#include <fstream>
 #include <unordered_set>
 #include <android/log.h>
 #include <fcntl.h>
 #include <sys/fcntl.h>
+#include <sys/stat.h>
+#include <chrono>
+#include <sys/prctl.h>
+
 #include <stdlib.h>
 #include <libgen.h>
 #include <sys/system_properties.h>
@@ -32,7 +37,6 @@ constexpr auto kLibWhitelistMinSdk = 23;
 constexpr char kSingleLibName[] = "libcutils.so";
 
 constexpr char kAtraceSymbol[] = "atrace_setup";
-// Prefix for system libraries.
 constexpr char kSysLibPrefix[] = "/system";
 
 int *atrace_marker_fd = nullptr;
@@ -41,35 +45,39 @@ std::atomic<uint64_t> original_tags(UINT64_MAX);
 std::atomic<bool> systrace_installed;
 bool first_enable = true;
 
+std::ofstream *os = nullptr;
+
+std::mutex mtx_;
+
 int32_t threadID() {
     return static_cast<int32_t>(syscall(__NR_gettid));
 }
 
-int64_t monotonicTime() {
-    timespec ts{};
-    syscall(__NR_clock_gettime, CLOCK_MONOTONIC, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * kSecondNanos + ts.tv_nsec;
+std::string threadName() {
+    constexpr int kMaxThreadNameSize = 100;
+    char threadName[kMaxThreadNameSize];
+    if (prctl(PR_GET_NAME, threadName) != 0) {
+        return "";
+    } else {
+        return threadName;
+    }
 }
 
 void log_systrace(const void *buf, size_t count) {
     const char *msg = reinterpret_cast<const char *>(buf);
 
-    switch (msg[0]) {
-        case 'B': { // begin synchronous event. format: "B|<pid>|<name>"
-            ALOG("%s", msg);
-            break;
-        }
-        case 'E': { // end synchronous event. format: "E"
-            ALOG("%s", msg);
+    if (os != nullptr && os->is_open()) {
+        std::lock_guard<std::mutex> lockC(mtx_);
 
-            break;
-        }
-        // the following events we don't currently log.
-        case 'S': // start async event. format: "S|<pid>|<name>|<cookie>"
-        case 'F': // finish async event. format: "F|<pid>|<name>|<cookie>"
-        case 'C': // counter. format: "C|<pid>|<name>|<value>"
-        default:
-            return;
+        char buffer[1024];
+        auto start = std::chrono::steady_clock::now().time_since_epoch();
+        auto sec =
+                std::chrono::duration_cast<std::chrono::microseconds>(start).count() / 1000000.0f;
+        int n = sprintf(buffer, "<%s>-%d (-----) [001] .... %.5f: tracing_mark_write: %s\n",
+                        threadName().c_str(), threadID(), sec, msg);
+        os->write(buffer, n);
+
+        ALOG("%s", buffer);
     }
 }
 
@@ -265,7 +273,7 @@ void installSystraceSnooper() {
     systrace_installed = true;
 }
 
-void enableSystrace() {
+void enableSystrace(std::string const &trace_file) {
     if (!systrace_installed) {
         return;
     }
@@ -286,7 +294,16 @@ void enableSystrace() {
         UINT64_MAX) { // if we somehow call this twice in a row, don't overwrite the real tags
         original_tags = prev;
     }
-    ALOG("prev: %ld, current: %lx", prev, UINT64_MAX);
+
+    if (os != nullptr && os->is_open()) {
+        os->close();
+    }
+
+    os = new std::ofstream();
+    os->open(trace_file, std::ios::out | std::ios::trunc);
+    os->write("TRACE:\n", 7);
+    os->write("# tracer: nop\n", 13);
+    ALOG("trace_file_name=%s", trace_file.c_str());
 }
 
 void restoreSystrace() {
@@ -298,10 +315,14 @@ void restoreSystrace() {
     if (tags != UINT64_MAX) { // if we somehow call this before enableSystrace, don't screw it up
         atrace_enabled_tags->store(tags);
     }
+
+    if (os != nullptr) {
+        os->close();
+        os = nullptr;
+    }
 }
 
 bool installSystraceHook() {
-
     try {
         installSystraceSnooper();
         return true;
@@ -313,15 +334,17 @@ bool installSystraceHook() {
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_linkedin_android_atrace_Atrace_enableSystraceNative(JNIEnv *env, jclass type) {
-    enableSystrace();
+Java_com_linkedin_android_atrace_Atrace_enableSystraceNative(JNIEnv *env, jclass type,
+                                                             jstring filepath) {
+    const char *cstr = env->GetStringUTFChars(filepath, nullptr);
+    std::string str = std::string(cstr);
+    enableSystrace(str);
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_linkedin_android_atrace_Atrace_restoreSystraceNative(JNIEnv *env, jclass type) {
     restoreSystrace();
-
 }
 
 extern "C"

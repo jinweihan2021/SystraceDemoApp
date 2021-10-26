@@ -13,7 +13,7 @@ public final class Atrace {
     private static boolean sHasHook = false;
     private static boolean sHookFailed = false;
 
-    public static synchronized boolean hasHacks() {
+    public static synchronized boolean ensureHacked() {
         if (!sHasHook && !sHookFailed) {
             sHasHook = installSystraceHook();
 
@@ -23,18 +23,18 @@ public final class Atrace {
     }
 
 
-    public static void enableSystrace() {
-        if (!hasHacks()) {
+    public static void enableSystrace(String filePath) {
+        if (!ensureHacked()) {
             return;
         }
 
-        enableSystraceNative();
+        enableSystraceNative(filePath);
 
         SystraceReflector.updateSystraceTags();
     }
 
     public static void restoreSystrace() {
-        if (!hasHacks()) {
+        if (!ensureHacked()) {
             return;
         }
         restoreSystraceNative();
@@ -43,7 +43,7 @@ public final class Atrace {
 
     private static native boolean installSystraceHook();
 
-    private static native void enableSystraceNative();
+    private static native void enableSystraceNative(String filePath);
 
     private static native void restoreSystraceNative();
 
